@@ -1,0 +1,114 @@
+{
+  "name": "TN Ops — Migrations API",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "tn-ops-migrations",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "webhook-trigger",
+      "webhookId": "tn-ops-migrations",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.airtable.com/v0/apptbA8Mljf70CG24/tblBP4uzRGQBcBco9",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "pageSize",
+              "value": "100"
+            },
+            {
+              "name": "filterByFormula",
+              "value": "{Project}='GHL Website Migration'"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-migration-tasks",
+      "name": "Fetch Migration Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 300],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3qQl1blWZA3JeOfK",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const records = $input.first().json.records || [];\n\nconst migrations = records.map(r => {\n  const f = r.fields;\n  const taskName = f['Task'] || f[Object.keys(f)[0]] || '';\n  const domain = taskName.replace(/^Migrate:\\s*/i, '').trim();\n  \n  const notes = f['Notes'] || '';\n  \n  // Parse pipelineStage from notes\n  let pipelineStage = null;\n  const stageMatch = notes.match(/<!-- pipelineStage: ([\\w-]+) -->/);\n  if (stageMatch) pipelineStage = stageMatch[1];\n  \n  // Parse stageData from notes\n  let stageData = null;\n  try {\n    const dataMatch = notes.match(/<!-- stageData: (\\{.*?\\}) -->/);\n    if (dataMatch) stageData = JSON.parse(dataMatch[1]);\n  } catch(e) {}\n  \n  // Parse migrationMeta from notes\n  let meta = {};\n  try {\n    const metaMatch = notes.match(/<!-- migrationMeta: (\\{.*?\\}) -->/);\n    if (metaMatch) meta = JSON.parse(metaMatch[1]);\n  } catch(e) {}\n  \n  // Strip metadata comments for human-readable notes\n  const humanNotes = notes.replace(/<!-- \\w+: .*? -->/g, '').trim();\n  \n  // Map status\n  const statusMap = { 'To Do': 'Queued', 'In Progress': null, 'Done': 'Live', 'Blocked': 'Issues' };\n  const status = pipelineStage || statusMap[f['Status']] || f['Status'] || 'Queued';\n  \n  return {\n    id: r.id,\n    domain,\n    client: meta.client || domain,\n    status,\n    notes: humanNotes,\n    stageData,\n    pilot: meta.pilot || false,\n    test: meta.test || false,\n    hasEmail: meta.hasEmail || false,\n    ghlContactEmail: meta.ghlContactEmail || null,\n    currentSub: meta.currentSub || 0,\n    priority: f['Priority'] || null,\n    assignee: f['Assignee'] || null,\n    dueDate: f['Due Date'] || null\n  };\n}).filter(m => m.domain);\n\nreturn [{\n  json: {\n    success: true,\n    timestamp: new Date().toISOString(),\n    count: migrations.length,\n    migrations\n  }\n}];"
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              },
+              {
+                "name": "Access-Control-Allow-Headers",
+                "value": "Content-Type"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "public, max-age=15"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [980, 300]
+    }
+  ],
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [{ "node": "Fetch Migration Tasks", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Migration Tasks": {
+      "main": [
+        [{ "node": "Format Response", "type": "main", "index": 0 }]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [{ "node": "Respond Success", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  }
+}

@@ -1,0 +1,223 @@
+{
+  "name": "TN Ops — Migration Update",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "tn-ops-migration-update",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "webhook-trigger",
+      "webhookId": "tn-ops-migration-update",
+      "name": "Webhook POST",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst domain = body.domain;\nconst pipelineStage = body.status || 'Queued';\nconst stageData = body.stageData || null;\nconst timestamp = body.timestamp || new Date().toISOString();\n\nif (!domain) {\n  return [{ json: { success: false, error: 'Missing domain' } }];\n}\n\n// Map pipeline stages to Airtable-compatible Status values\nconst stageToStatus = {\n  'Queued': 'To Do',\n  'Pre-Check': 'In Progress',\n  'GHL Setup': 'In Progress',\n  'Content': 'In Progress',\n  'Testing': 'In Progress',\n  'Review': 'In Progress',\n  'DNS': 'In Progress',\n  'Live': 'Done',\n  'Issues': 'Blocked'\n};\nconst airtableStatus = stageToStatus[pipelineStage] || 'In Progress';\n\nreturn [{ json: { domain, status: airtableStatus, pipelineStage, stageData, taskName: `Migrate: ${domain}`, timestamp } }];"
+      },
+      "id": "parse-input",
+      "name": "Parse Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.airtable.com/v0/apptbA8Mljf70CG24/tblBP4uzRGQBcBco9",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "filterByFormula",
+              "value": "=AND({Project}='GHL Website Migration', {Task}='{{ $json.taskName }}')"
+            },
+            {
+              "name": "pageSize",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "find-existing",
+      "name": "Find Existing Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [740, 300],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3qQl1blWZA3JeOfK",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const records = $input.first().json.records || [];\nconst prev = $('Parse Input').first().json;\n\n// Build updated Notes: preserve existing content, only update metadata comments\nfunction mergeNotes(existingNotes, pipelineStage, stageData) {\n  let notes = existingNotes || '';\n  // Update or append pipelineStage comment\n  if (notes.match(/<!-- pipelineStage: .*? -->/)) {\n    notes = notes.replace(/<!-- pipelineStage: .*? -->/, `<!-- pipelineStage: ${pipelineStage} -->`);\n  } else {\n    notes += `\\n<!-- pipelineStage: ${pipelineStage} -->`;\n  }\n  // Update or append stageData comment if provided\n  if (stageData) {\n    const dataStr = JSON.stringify(stageData);\n    if (notes.match(/<!-- stageData: .*? -->/)) {\n      notes = notes.replace(/<!-- stageData: .*? -->/, `<!-- stageData: ${dataStr} -->`);\n    } else {\n      notes += `\\n<!-- stageData: ${dataStr} -->`;\n    }\n  }\n  return notes.trim();\n}\n\nif (records.length > 0) {\n  const rec = records[0];\n  const existingNotes = rec.fields?.Notes || rec.fields?.notes || '';\n  const notesField = mergeNotes(existingNotes, prev.pipelineStage, prev.stageData);\n  return [{ json: { \n    action: 'update', \n    recordId: rec.id, \n    domain: prev.domain,\n    status: prev.status, \n    notesField,\n    taskName: prev.taskName,\n    timestamp: prev.timestamp\n  } }];\n} else {\n  const notesField = mergeNotes('', prev.pipelineStage, prev.stageData);\n  return [{ json: { \n    action: 'create', \n    recordId: null, \n    domain: prev.domain,\n    status: prev.status, \n    notesField,\n    taskName: prev.taskName,\n    timestamp: prev.timestamp\n  } }];\n}"
+      },
+      "id": "decide-action",
+      "name": "Decide Create or Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond1",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "update",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-update",
+      "name": "If Update",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1220, 300]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.airtable.com/v0/apptbA8Mljf70CG24/tblBP4uzRGQBcBco9",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"records\": [{ \"id\": \"{{ $json.recordId }}\", \"fields\": { \"Status\": \"{{ $json.status }}\", \"Notes\": {{ JSON.stringify($json.notesField) }} } }] }",
+        "options": {}
+      },
+      "id": "update-record",
+      "name": "Update Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1460, 200],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3qQl1blWZA3JeOfK",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.airtable.com/v0/apptbA8Mljf70CG24/tblBP4uzRGQBcBco9",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"records\": [{ \"fields\": { \"Task\": \"{{ $json.taskName }}\", \"Project\": \"GHL Website Migration\", \"Status\": \"{{ $json.status }}\", \"Notes\": {{ JSON.stringify($json.notesField) }}, \"Assignee\": \"Claude\" } }] }",
+        "options": {}
+      },
+      "id": "create-record",
+      "name": "Create Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1460, 400],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3qQl1blWZA3JeOfK",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('Decide Create or Update').first().json;\nreturn [{ json: { success: true, action: prev.action, domain: prev.domain, status: prev.status } }];"
+      },
+      "id": "format-result",
+      "name": "Format Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1700, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              },
+              {
+                "name": "Access-Control-Allow-Headers",
+                "value": "Content-Type"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1940, 300]
+    }
+  ],
+  "connections": {
+    "Webhook POST": {
+      "main": [
+        [{ "node": "Parse Input", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Input": {
+      "main": [
+        [{ "node": "Find Existing Task", "type": "main", "index": 0 }]
+      ]
+    },
+    "Find Existing Task": {
+      "main": [
+        [{ "node": "Decide Create or Update", "type": "main", "index": 0 }]
+      ]
+    },
+    "Decide Create or Update": {
+      "main": [
+        [{ "node": "If Update", "type": "main", "index": 0 }]
+      ]
+    },
+    "If Update": {
+      "main": [
+        [{ "node": "Update Record", "type": "main", "index": 0 }],
+        [{ "node": "Create Record", "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Record": {
+      "main": [
+        [{ "node": "Format Result", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Record": {
+      "main": [
+        [{ "node": "Format Result", "type": "main", "index": 0 }]
+      ]
+    },
+    "Format Result": {
+      "main": [
+        [{ "node": "Respond Success", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  }
+}

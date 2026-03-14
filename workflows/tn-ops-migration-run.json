@@ -1,0 +1,223 @@
+{
+  "name": "TN Ops — Migration Run Stage",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "tn-ops-migration-run",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "webhook-trigger",
+      "webhookId": "tn-ops-migration-run",
+      "name": "Webhook POST",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst domain = body.domain;\nconst stage = body.stage;\n\nif (!domain || !stage) {\n  return [{ json: { success: false, error: 'Missing domain or stage' } }];\n}\n\n// Map pipeline stages to Airtable statuses\nconst stageToStatus = {\n  'Queued': 'To Do',\n  'Pre-Check': 'In Progress',\n  'GHL Setup': 'In Progress',\n  'Content': 'In Progress',\n  'Testing': 'In Progress',\n  'Review': 'In Progress',\n  'DNS': 'In Progress',\n  'Live': 'Done',\n  'Issues': 'Blocked'\n};\n\nconst airtableStatus = stageToStatus[stage] || 'In Progress';\nconst stageData = body.stageData || null;\n\n// Build notes metadata\nlet notesField = `Stage run requested: ${stage} at ${new Date().toISOString()}`;\nnotesField += `\\n<!-- pipelineStage: ${stage} -->`;\nif (stageData) {\n  notesField += `\\n<!-- stageData: ${JSON.stringify(stageData)} -->`;\n}\n\nreturn [{ json: {\n  domain,\n  stage,\n  airtableStatus,\n  notesField,\n  taskName: `Migrate: ${domain}`,\n  client: body.client || domain,\n  locationId: body.locationId || null,\n  isTest: body.isTest || false,\n  supertypeId: body.supertypeId || null\n} }];"
+      },
+      "id": "parse-input",
+      "name": "Parse Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.airtable.com/v0/apptbA8Mljf70CG24/tblBP4uzRGQBcBco9",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "filterByFormula",
+              "value": "=AND({Project}='GHL Website Migration', {Task}='{{ $json.taskName }}')"
+            },
+            {
+              "name": "pageSize",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "find-existing",
+      "name": "Find Existing Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [740, 300],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3qQl1blWZA3JeOfK",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const records = $input.first().json.records || [];\nconst prev = $('Parse Input').first().json;\n\nif (records.length > 0) {\n  const recId = records[0].id;\n  return [{ json: { ...prev, action: 'update', recordId: recId } }];\n} else {\n  return [{ json: { ...prev, action: 'create', recordId: null } }];\n}"
+      },
+      "id": "decide-action",
+      "name": "Decide Action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond1",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "update",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-update",
+      "name": "If Update",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1220, 300]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.airtable.com/v0/apptbA8Mljf70CG24/tblBP4uzRGQBcBco9",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"records\": [{ \"id\": \"{{ $json.recordId }}\", \"fields\": { \"Status\": \"{{ $json.airtableStatus }}\", \"Notes\": {{ JSON.stringify($json.notesField) }} } }] }",
+        "options": {}
+      },
+      "id": "update-record",
+      "name": "Update Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1460, 200],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3qQl1blWZA3JeOfK",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.airtable.com/v0/apptbA8Mljf70CG24/tblBP4uzRGQBcBco9",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"records\": [{ \"fields\": { \"Task\": \"{{ $json.taskName }}\", \"Project\": \"GHL Website Migration\", \"Status\": \"{{ $json.airtableStatus }}\", \"Notes\": {{ JSON.stringify($json.notesField) }}, \"Assignee\": \"Claude\" } }] }",
+        "options": {}
+      },
+      "id": "create-record",
+      "name": "Create Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1460, 400],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3qQl1blWZA3JeOfK",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('Decide Action').first().json;\nreturn [{ json: {\n  success: true,\n  action: prev.action,\n  domain: prev.domain,\n  stage: prev.stage,\n  status: prev.airtableStatus,\n  message: `Stage ${prev.stage} recorded. Run tools locally via Claude Code.`\n} }];"
+      },
+      "id": "format-result",
+      "name": "Format Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1700, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              },
+              {
+                "name": "Access-Control-Allow-Headers",
+                "value": "Content-Type"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1940, 300]
+    }
+  ],
+  "connections": {
+    "Webhook POST": {
+      "main": [
+        [{ "node": "Parse Input", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Input": {
+      "main": [
+        [{ "node": "Find Existing Task", "type": "main", "index": 0 }]
+      ]
+    },
+    "Find Existing Task": {
+      "main": [
+        [{ "node": "Decide Action", "type": "main", "index": 0 }]
+      ]
+    },
+    "Decide Action": {
+      "main": [
+        [{ "node": "If Update", "type": "main", "index": 0 }]
+      ]
+    },
+    "If Update": {
+      "main": [
+        [{ "node": "Update Record", "type": "main", "index": 0 }],
+        [{ "node": "Create Record", "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Record": {
+      "main": [
+        [{ "node": "Format Result", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Record": {
+      "main": [
+        [{ "node": "Format Result", "type": "main", "index": 0 }]
+      ]
+    },
+    "Format Result": {
+      "main": [
+        [{ "node": "Respond Success", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  }
+}
